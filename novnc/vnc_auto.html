@@ -185,11 +185,11 @@
     } 
         //getInfo();
 
-        setViewDrag(false);
+        //setViewDrag(false);
 
 function setViewDrag (drag) {
     var vmb = $D('noVNC_view_drag_button');
-    alert("button class name:"+vmb.className);
+    //alert("button class name:"+vmb.className);
     vmb.style.display = "inline";
     if(vmb.className == "noVNC_status_button") {
         vmb.className = "noVNC_status_button_selected"
@@ -289,12 +289,13 @@ function setViewDrag (drag) {
 if (window.fullScreenApi.supportsFullScreen) {
     //alert("this is support full Screen，yeah！")
 }
-
+/*
 var fsButton = document.getElementById('fullScreenButton'),
         fsElement = document.getElementById('noVNC_canvas');
 fsButton.addEventListener('click', function() {
     window.fullScreenApi.requestFullScreen(fsElement);
 }, true);
+*/
  //           $D('fullScreenButton').style.display = "inline";
     //        $D('fullScreenButton').onclick = fullScreen;
        // function fullScreen() {
