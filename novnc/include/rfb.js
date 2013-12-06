@@ -31,7 +31,37 @@ var that           = {},  // Public API methods
     keyPress, mouseButton, mouseMove,
 
     checkEvents,  // Overridable for testing
+//=======================MQ====================================
+    //zrle encoder
+    colorDepth = 0,
+    zrlePixFactor = 0,
+    zrleTilePixels = [],
+    BlackWhite = 0,
+    redShift = 0,
+    greenShift = 0,
+    blueShift = 0,
+    redMax = 0,
+    greenMax = 0,
+    blueMax = 0,
+    Tens = 1,
+    Hundreds = 2,
+    Thousends = 3,
+    Millions = 4,
 
+    PIXEL_FORMAT     =
+    [
+        [8, 3, 0, 1, 1, 1, 1, 0, 1, 2],
+        [8, 6, 0, 1, 3, 3, 3, 0, 2, 4],
+        [8, 8, 0, 1, 7, 7, 3, 0, 3, 6],
+        [16, 16, 0, 1, 63, 31, 31, 0, 6, 11],
+        [32, 24, 0, 1, 255, 255, 255, 16, 8, 0]
+    ],
+    test_packed_rle = true, 
+    test_plain_rle = true, 
+    test_packed = true, 
+    test_raw = true,
+    debugZRLE = false,
+//======================MQ=================================
 
     //
     // Private RFB namespace variables
@@ -50,6 +80,7 @@ var that           = {},  // Public API methods
     // In preference order
     encodings      = [
         ['COPYRECT',         0x01 ],
+        //['ZRLE',    16],//MQ
         //['TIGHT',            0x07 ],//MQ
         ['TIGHT_PNG',        -260 ],
         ['TIGHT',            0x07 ],
@@ -97,7 +128,8 @@ var that           = {},  // Public API methods
         subencoding    : -1,
         background     : null,
         imgQ           : [],  // TIGHT_PNG image queue
-        zlibs          : []   // TIGHT zlib streams
+        zlibs          : [],   // TIGHT zlib streams
+        zlib_zrle       : null //Zrle zlib stream MQ
     },
 
     fb_Bpp         = 4,
@@ -397,6 +429,11 @@ init_vars = function()
     {
         encStats[encodings[i][1]][0] = 0;
     }
+
+//================MQ============================
+    FBU.zlib_zrle = new TINF();
+    FBU.zlib_zrle.init();
+//============================================
     
     for (i=0; i < 4; i++) 
     {
@@ -635,7 +672,6 @@ fail = function(msg)
 
 handle_message = function() 
 {
-    Util.Debug(">"+(new Date().getTime())+">>>handle_message-"+rfb_state);
     ////Util.Debug(">> handle_message ws.rQlen(): " + ws.rQlen());
     ////Util.Debug("ws.rQslice(0,20): " + ws.rQslice(0,20) + " (" + ws.rQlen() + ")");
     if (ws.rQlen() === 0) 
@@ -1097,7 +1133,8 @@ function scaleCanvas() {
 
 /* Normal RFB/VNC server message handler */
 normal_msg = function() {
-    ////Util.Debug(">> normal_msg");
+    //=msg_type[8bit]==framebuffer updata==
+    //Util.Debug(">> normal_msg--4byte:["+ws.rQslice(0, 4)+"]");
 
     var ret = true, msg_type, length, text,
         c, first_colour, num_colours, red, green, blue;
@@ -1107,7 +1144,6 @@ normal_msg = function() {
     } else {
         msg_type = ws.rQshift8();
     }
-    Util.Debug(">"+(new Date().getTime())+">>> normal_msg--"+msg_type);
     switch (msg_type) {
     case 0:  // FramebufferUpdate
         ret = framebufferUpdate(); // false means need more data
@@ -1158,6 +1194,9 @@ normal_msg = function() {
 
 framebufferUpdate = function() {
     var now, hdr, fbu_rt_diff, ret = true;
+    //=padding[8bit]==rects[16bit]==
+    //Util.Debug("<<<<frameBufferUpdate--rects:"+FBU.rects+"--19byte:["+ws.rQslice(0, 19)+"]");
+    
 
     if (FBU.rects === 0) {
         ////Util.Debug("New FBU: ws.rQslice(0,20): " + ws.rQslice(0,20));
@@ -1208,7 +1247,7 @@ framebufferUpdate = function() {
                 msg += " encoding:" + FBU.encoding;
                 msg += "(" + encNames[FBU.encoding] + ")";
                 msg += ", ws.rQlen(): " + ws.rQlen();
-                ////Util.Debug(msg);
+                //Util.Debug(msg);
                 
             } else {
                 fail("Disconnected: unsupported encoding " +
@@ -1479,6 +1518,302 @@ encHandlers.HEXTILE = function display_hextile() {
     ////Util.Debug("<< display_hextile");
     return true;
 };
+
+//=================MQ==================================================================
+
+function debug_zrle(msg) {
+    if (debugZRLE) {
+        Util.Error("==="+msg);
+    };
+}
+
+function get_data(arr, num) {
+    //debug_zrle("get_data-arr:"+arr);
+    var data = 0;
+    for (var i = 0; i < num; i++) {
+        //debug_zrle("get_data-"+arr[i]);
+        data += arr[i] << (num-1-i)*8;
+    };
+    return data;
+}
+
+function getPixData(arr) {
+    //debug_zrle("arr:["+arr+"]-["+redShift+","+greenShift+","+blueShift+"]["
+     //                                       +redMax+","+greenMax+","+blueMax+"]");
+    
+    var data = get_data(arr, arr.length);
+    var r = data >> redShift & redMax;
+    var g = data >> greenShift & greenMax;
+    var b = data >> blueShift & blueMax;
+    var result = [b, g, r];
+    
+    //debug_zrle("result:["+result+"]");
+
+    if (colorDepth == 24) {};
+    return result;
+}
+
+function showTile(data, x, y, w, h) {
+        FBU.imgQ.push({
+                'type': 'rgb',
+                'img':  {'complete': true, 'data': data},
+                'x': x,
+                'y': y,
+                'width': w,
+                'height': h});
+}
+
+function stop() {
+    var stop = null;
+    stop.length;
+}
+
+encHandlers.ZRLE = function () 
+{
+
+    Util.Debug(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> display_zrle");
+    var  tile_width = 64,
+        x, w, y, h,
+        rQ = ws.get_rQ(), rQi_zrle = ws.get_rQi(); 
+
+    //===================================
+    FBU.bytes = 4;
+    if (ws.rQwait("ZRLE data length bytes", FBU.bytes)) { 
+        debug_zrle("Byte number data not enough, return false!!! ")
+        return false;
+    };
+    var nBytes = get_data(rQ.slice(rQi_zrle, rQi_zrle+4), 4);
+    //debug_zrle("get nBytes:"+nBytes);
+    FBU.bytes += nBytes;
+    if (ws.rQwait("ZRLE real data", FBU.bytes)) { 
+        debug_zrle("real data not enough, return false!!! ");
+        return false;
+    };
+
+    ws.set_rQi((rQi_zrle+4+nBytes));
+    var data = rQ.slice(rQi_zrle+4, rQi_zrle + 4 + nBytes);
+    //debug_zrle("get real data, length:"+data.length+"====ok!!!");
+    //debug_zrle("raw data:["+data+"]");
+
+    var uncompressed, zrle_data, left;
+
+    uncompressed = FBU.zlib_zrle.uncompress(data, 0);
+    if (uncompressed.status !== 0) {
+        debug_zrle("Invalid data in zlib stream for ZRLE");
+    }
+    zrle_data = uncompressed.data;
+
+    left = zrle_data.length;
+    //debug_zrle("get uncompressed data, length:"+zrle_data.length+"====ok!!!");
+    //debug_zrle(""+zrle_data);
+    var zrle_rQi = 0;
+    var tile_data = [];
+
+    //===================================
+
+    if (FBU.tiles === 0) {
+        FBU.tiles_x = Math.ceil(FBU.width/tile_width);
+        FBU.tiles_y = Math.ceil(FBU.height/tile_width);
+
+        FBU.total_tiles = FBU.tiles_x * FBU.tiles_y;
+        FBU.tiles = FBU.total_tiles;
+    }
+
+    var bpp_zrle = 0;
+    if (colorDepth <= 8) {
+         bpp_zrle = 1;
+    } else {
+         bpp_zrle = colorDepth / 8;
+    };
+
+    for (y = FBU.y; y < FBU.y+FBU.height; y += tile_width) {
+       h = Math.min(FBU.y+FBU.height-y, tile_width);
+      for (x = FBU.x; x < FBU.x+FBU.width; x += tile_width) {
+        w = Math.min(FBU.x+FBU.width-x, tile_width);
+
+        zrle_rQi++;//get mode data[1Byte]
+        var mode = zrle_data.slice(zrle_rQi-1, zrle_rQi);
+
+        //debug_zrle("----mode:"+mode);
+        left--;
+        var rle = (mode & 128) != 0;
+        var palSize = mode & 127;
+        var palette = [];
+
+
+        //==========read palette data=================
+        //debug_zrle("------read palette data--size:"+palSize+"------------------");
+
+
+        //debug_zrle("palette data:["+
+          //         zrle_data.slice(zrle_rQi, zrle_rQi+20)
+          //        +"]");
+        for (var i = 0; i < palSize; i++) {
+           zrle_rQi += bpp_zrle;
+           var data = getPixData(zrle_data.slice(zrle_rQi-bpp_zrle, zrle_rQi));
+           //debug_zrle("data:["+data+"]");
+           palette = palette.concat(data);
+           //debug_zrle("palette:["+palette+"]");
+           if (i>2) {
+            //stop();
+           };
+        };
+        //zrle_rQi = zrle_rQi + palSize*bpp;
+        //palette = zrle_data.slice(zrle_rQi - palSize*bpp, zrle_rQi);
+        //======================================
+
+        //================================
+        //debug_zrle("[x:"+x+",y:"+y+",w:"+w+",h:"+h);
+        if (palSize == 1) {
+            //debug_zrle("------palSize=1--["+palette+"]----------");
+            display.fillRect(x, y, w, h, palette);
+            //stop();
+            FBU.bytes = 0;
+            FBU.tiles -= 1;
+            continue;
+        };
+        //================================
+
+        //================================
+        if (!rle) {
+            if (palSize == 0) {
+                //debug_zrle("-------------------step 1==Raw---------------------");
+                //debug_zrle("["+zrle_data.slice(zrle_rQi, zrle_rQi+20)+"]");
+                for (var i = 0; i < w*h; i++) {
+                   zrle_rQi += bpp_zrle;
+                   var pix = getPixData(zrle_data.slice(zrle_rQi-bpp_zrle, zrle_rQi));
+                   tile_data = tile_data.concat(pix); 
+                };
+                var len;
+                len = w*h*bpp_zrle;
+                left -= len;
+                //zrle_rQi += len;//get raw data[w*h*bpp Byte]
+                showTile(tile_data, x, y, w, h);
+                tile_data = [];
+                //debug_zrle("----step1--get:"+len+", left:"+left);
+                //stop();
+            } else {
+                debug_zrle("-------------------step 2==ZrlePacked---------------------");
+                debug_zrle("["+zrle_data.slice(zrle_rQi, zrle_rQi+20)+"]");
+                var bppp = ((palSize > 16) ? 8 :
+                                        ((palSize > 4) ?4 :
+                                            ((palSize > 2) ? 2 : 1)));
+                var len;
+                len = w*h*(bppp / 8);
+                var b = 0;
+                
+                for (var i = 0; i < len; i++) {
+                    zrle_rQi++;
+                    b = zrle_data.slice(zrle_rQi-1, zrle_rQi);
+                    for (var j = 0; j < 8/bppp; j++) {
+                        var index = (b >> (8-bppp*(j+1))) & ((1<<bppp)-1) & 127; 
+                        var pix = palette.slice(index*3, index*3+3);
+                        //debug_zrle("index:"+index+",bppp:"+bppp+"["+palette+"]");
+                        //debug_zrle("tile_data:"+tile_data);
+                        tile_data = tile_data.concat(pix);
+                    };
+                    //if (i == 4) {stop();};
+                    
+                };
+                showTile(tile_data, x, y, w, h);
+                tile_data = [];
+                left -= len;
+                //zrle_rQi += len;//get zrle packed data 
+                debug_zrle("----step2--get:"+len+", left:"+left);
+                //stop();
+            };
+        } else {
+            if (palSize == 0) {
+                //debug_zrle("-------------------step 3==PlainRle-"+w+","+h+"--------------------");
+                //debug_zrle("["+zrle_data.slice(zrle_rQi, zrle_rQi+20)+"]");
+                var debug_len = 0;
+                var b = 0;
+                var ptr = 0;
+                while (ptr < w*h) {
+                    var len = 1;
+                    debug_len += colorDepth / 8;
+                    zrle_rQi += colorDepth / 8;
+                    var pix = getPixData(zrle_data.slice(zrle_rQi-(colorDepth/8), zrle_rQi));
+                    //stop();
+                    
+                    do {
+                        debug_len++;
+                        zrle_rQi++;
+                        b = +zrle_data.slice(zrle_rQi-1, zrle_rQi);
+                        len += b;
+                    } while (b == 255);
+
+                    if (!(len <= w*h - ptr)) {
+                        debug_zrle("step 3 failed!!!");
+                    };
+
+                    for (var i = 0; i < len; i++) {
+                        tile_data = tile_data.concat(pix);
+                    };
+                    ptr += len;
+                }
+                showTile(tile_data, x, y, w, h);
+                tile_data = [];
+                left -= debug_len;
+                //debug_zrle("----step3 get:"+debug_len+", left:"+left);
+                //stop();
+            } else {
+                //debug_zrle("-------------------step 4==PackedRle---------------------")
+                //debug_zrle("["+zrle_data.slice(zrle_rQi, zrle_rQi+20)+"]");
+                var ptr = 0;
+                var debug_len = 0;
+                while (ptr < w*h) {
+                    zrle_rQi++;
+                    var index = zrle_data.slice(zrle_rQi-1, zrle_rQi);
+                    debug_len++;
+                    var len =1;
+                    if ((index & 128) != 0) {
+                        var b;
+                        do {
+                            debug_len++;
+                            zrle_rQi++;
+                            b = +zrle_data.slice(zrle_rQi-1, zrle_rQi);
+                            len += b;
+                        } while (b == 255);
+                        if (!(len <= w*h - ptr)) {
+                            debug_zrle("----step4 failed!!!!");
+                        };
+                    };
+                    index &= 127
+                    //debug_zrle("index:"+index+"["+palette+"]");
+                    var pix = palette.slice(index*3, index*3+3);
+                    //debug_zrle("pix:"+pix);
+                    //debug_zrle("tile_data:"+tile_data);
+
+                    for (var i = 0; i < len; i++) {
+                       tile_data = tile_data.concat(pix); 
+                    };
+                    ptr += len;
+                }
+                showTile(tile_data, x, y, w, h);
+                tile_data = [];
+                left -= debug_len;
+                //debug_zrle("----step4 get:"+debug_len+", left:"+left);
+                //stop();
+            };
+        };
+        //================================
+
+        FBU.bytes = 0;
+        FBU.tiles -= 1;
+        }
+    }
+
+    if (FBU.tiles === 0) {
+        //showTile(tile_data, FBU.x, FBU.y, FBU.width, FBU.height);
+        FBU.rects -= 1;
+    }
+
+    Util.Debug("<<<<<<<<<<<<<<<<<<<<<<<<<<< display_zrle");
+    return true;
+
+}
+//====================MQ======================================================
 
 
 // Get 'compact length' header and data size
@@ -1869,24 +2204,40 @@ encHandlers.compress_lo = function set_compress_level()
 
 pixelFormat = function() 
 {
-    ////Util.Debug(">> pixelFormat");
+    //Util.Debug(">> pixelFormat");
     var arr;
+
+    var format = PIXEL_FORMAT[Millions];
+    fb_Bpp = format[0] / 8;
+    colorDepth = format[1];
+    zrlePixFactor = 24 / colorDepth;
+    redMax = format[4];
+    greenMax = format[5];
+    blueMax = format[6];
+    redShift = format[7];
+    greenShift = format[8];
+    blueShift = format[9];
+    Util.Debug("---format:"+format);
+    Util.Debug("---fb_Bpp:"+fb_Bpp);
+    Util.Debug("--colorDepth:"+colorDepth);
+    Util.Debug("--zrlePixFactor:"+zrlePixFactor);
+// old MQ
     arr = [0];     // msg-type
     arr.push8(0);  // padding
     arr.push8(0);  // padding
     arr.push8(0);  // padding
 
-    arr.push8(fb_Bpp * 8); // bits-per-pixel
-    arr.push8(fb_depth * 8); // depth
-    arr.push8(0);  // little-endian
-    arr.push8(conf.true_color ? 1 : 0);  // true-color
+    arr.push8(format[0]); // bits-per-pixel
+    arr.push8(format[1]); // depth
+    arr.push8(format[2]);  // little-endian
+    arr.push8(format[3]);  // true-color
 
-    arr.push16(255);  // red-max
-    arr.push16(255);  // green-max
-    arr.push16(255);  // blue-max
-    arr.push8(16);    // red-shift
-    arr.push8(8);     // green-shift
-    arr.push8(0);     // blue-shift
+    arr.push16(format[4]);  // red-max
+    arr.push16(format[5]);  // green-max
+    arr.push16(format[6]);  // blue-max
+    arr.push8(format[7]);    // red-shift
+    arr.push8(format[8]);     // green-shift
+    arr.push8(format[9]);     // blue-shift
 
     arr.push8(0);     // padding
     arr.push8(0);     // padding

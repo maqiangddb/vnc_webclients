@@ -516,10 +516,7 @@ function onMouseButton(e, down) {
                 (evt.button & 0x2) * 2 +  // Right
                 (evt.button & 0x4) / 2;   // Middle
     }
-    //MQ
-    //console.log("mouse " + pos.x + "," + pos.y + " down: " + down +
-     //          " bmask: " + bmask + "(evt.button: " + evt.button + ")");
-    //
+
     if (bmask > 0 && conf.onMouseButton) {
         //Util.Debug("onMouseButton " + (down ? "down" : "up") +
          //          ", x: " + pos.x + ", y: " + pos.y + ", bmask: " + bmask);
@@ -566,7 +563,6 @@ function onMouseMove(e) {
     }
     evt = (e ? e : window.event);
     pos = Util.getEventPosition(e, conf.target, conf.scale);
-    console.log('mouse ' + evt.which + '/' + evt.button + ' up:' + pos.x + "," + pos.y);//MQ
     if (conf.onMouseMove) {
         conf.onMouseMove(pos.x, pos.y);
     }
